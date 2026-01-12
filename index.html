@@ -378,6 +378,7 @@
         </button>
         <button id="btnSwap" title="Swap input and output">Swap</button>
         <button id="btnCopy" title="Copy output to clipboard">Copy output</button>
+                <button id="btnShare" title="Copy a shareable link that loads the text via Base64">Share link</button>
         <button id="btnDownload" title="Download output as .txt">Download .txt</button>
       </div>
 
@@ -423,6 +424,113 @@
   "use strict";
 
   const $ = (id) => document.getElementById(id);
+  // ---------- URL import/export (Base64URL) ----------
+  // Load text from:
+  //   ?b64=...  (base64url recommended)
+  //   #b64=...  (recommended for longer text)
+  // Aliases: text64, t
+  // Optional flags (only applied if present): nfkc=1 inv=1 lig=1 live=1
+  function padBase64(b64) {
+    const mod = b64.length % 4;
+    return mod === 0 ? b64 : b64 + "=".repeat(4 - mod);
+  }
+
+  function bytesToBinaryString(bytes) {
+    let bin = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return bin;
+  }
+
+  function encodeUtf8ToBase64Url(text) {
+    const bytes = new TextEncoder().encode(text);
+    const b64 = btoa(bytesToBinaryString(bytes));
+    return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  }
+
+  function decodeBase64UrlToUtf8(b64url) {
+    const normalized = padBase64(
+      String(b64url).replace(/-/g, "+").replace(/_/g, "/").replace(/\s/g, "")
+    );
+    const binary = atob(normalized);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  }
+
+  function getUrlParam(name) {
+    const qs = new URLSearchParams(window.location.search);
+    const v1 = qs.get(name);
+    if (v1 !== null) return v1;
+
+    const rawHash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+    const hs = new URLSearchParams(rawHash);
+    return hs.get(name);
+  }
+
+  function hasUrlParam(name) {
+    return getUrlParam(name) !== null;
+  }
+
+  function parseBoolParam(value) {
+    if (value === null) return null;
+    const v = String(value).trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(v)) return true;
+    if (["0", "false", "no", "n", "off"].includes(v)) return false;
+    return null;
+  }
+
+  function applyOptionsFromUrl() {
+    const nfkc = parseBoolParam(getUrlParam("nfkc"));
+    const inv  = parseBoolParam(getUrlParam("inv"));
+    const lig  = parseBoolParam(getUrlParam("lig"));
+    const live = parseBoolParam(getUrlParam("live"));
+
+    if (nfkc !== null) $("optNFKC").checked = nfkc;
+    if (inv  !== null) $("optInvisible").checked = inv;
+    if (lig  !== null) $("optLigatures").checked = lig;
+    if (live !== null) $("optLive").checked = live;
+  }
+
+  function initFromUrl() {
+    // Apply checkbox flags first (if present).
+    if (hasUrlParam("nfkc") || hasUrlParam("inv") || hasUrlParam("lig") || hasUrlParam("live")) {
+      applyOptionsFromUrl();
+    }
+
+    const b64 = getUrlParam("b64") || getUrlParam("text64") || getUrlParam("t");
+    if (!b64) return false;
+
+    try {
+      const text = decodeBase64UrlToUtf8(b64);
+      $("input").value = text;
+      runConversion();
+      toast("Loaded input from URL.");
+      return true;
+    } catch (err) {
+      console.error("Failed to decode Base64 from URL:", err);
+      toast("Could not decode URL input.");
+      return false;
+    }
+  }
+
+  function buildShareUrl(text, opts) {
+    const base = window.location.origin + window.location.pathname;
+
+    const params = new URLSearchParams();
+    params.set("b64", encodeUtf8ToBase64Url(text));
+
+    // Persist current options, so the receiver sees the same behavior.
+    params.set("nfkc", opts.nfkc ? "1" : "0");
+    params.set("inv",  opts.removeInvisible ? "1" : "0");
+    params.set("lig",  opts.ligatures ? "1" : "0");
+
+    // Use hash to better tolerate longer payloads and avoid '+' being treated as space.
+    return base + "#" + params.toString();
+  }
+
 
   // ---------- Replacement rules ----------
   // Goal: Convert common "smart punctuation" and friends into plain ASCII equivalents.
@@ -651,6 +759,37 @@
     }
   });
 
+  $("btnShare").addEventListener("click", async () => {
+    const inputText = $("input").value;
+    const outputText = $("output").value;
+    const text = inputText || outputText;
+
+    if (!text) { toast("Nothing to share."); return; }
+
+    const opts = getOpts();
+    const url = buildShareUrl(text, opts);
+
+    try {
+      await navigator.clipboard.writeText(url);
+      toast(url.length > 8000 ? "Share link copied (very long URL)." : "Share link copied.");
+    } catch {
+      // Fallback for older browsers / restricted contexts
+      const ta = document.createElement("textarea");
+      ta.value = url;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      ta.style.top = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+      toast(url.length > 8000 ? "Share link copied (fallback, very long URL)." : "Share link copied (fallback).");
+    }
+
+    // Update the address bar without a reload (handy for manual sharing)
+    try { history.replaceState(null, "", url); } catch {}
+  });
   $("btnDownload").addEventListener("click", () => {
     const text = $("output").value;
     if (!text) { toast("Nothing to download."); return; }
@@ -714,6 +853,8 @@ Minus sign: 10 − 3 = 7`;
 
   // Initial state
   $("diagWrap").innerHTML = `<div class="muted">Paste text to see diagnostics.</div>`;
+  // Load input from URL (Base64URL)
+  initFromUrl();
 })();
 </script>
 </body>
