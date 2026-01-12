@@ -1,0 +1,40 @@
+name: Bug report
+description: Report a problem or unexpected behavior
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please provide enough detail to reproduce it.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect to happen, and what actually happened?
+      placeholder: Steps, expected behavior, actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: input-sample
+    attributes:
+      label: Sample input (if safe to share)
+      description: Paste a minimal input that triggers the problem.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics output
+      description: Paste the Diagnostics table entries if relevant.
+      render: text
+    validations:
+      required: false
+  - type: input
+    id: browser
+    attributes:
+      label: Browser
+      description: Example: Chrome 121, Firefox 122, Safari 17
+    validations:
+      required: true
