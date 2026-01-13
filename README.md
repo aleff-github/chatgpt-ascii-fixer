@@ -4,6 +4,7 @@ A single-file, client-side web tool that converts "smart punctuation" and other 
 
 This is useful when you paste text into environments that expect ASCII (config files, CSV/JSON, shell scripts, code, or strict parsers).
 
+
 ## Demo (GitHub Pages)
 
 After enabling GitHub Pages, your site will be available at:
