@@ -328,6 +328,30 @@
       white-space: nowrap;
       border: 0;
     }
+  
+
+/* Diagnostics: per-rule toggle button (left of first column) */
+.diagToggle{
+  padding: 6px 7px;
+  border-radius: 10px;
+  min-width: 28px;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+}
+.diagToggle.on{
+  border-color: rgba(122,162,255,.35);
+  background: linear-gradient(180deg, rgba(122,162,255,.16), rgba(122,162,255,.06));
+}
+.diagToggle.off{
+  border-color: rgba(255,107,107,.35);
+  background: linear-gradient(180deg, rgba(255,107,107,.18), rgba(255,107,107,.08));
+}
+.diagToggle:disabled{
+  opacity: .35;
+  cursor: not-allowed;
+  filter: none;
+}
   </style>
 </head>
 
@@ -410,7 +434,7 @@
       <summary>Diagnostics (what was found)</summary>
       <div class="diag">
         <div class="muted" style="margin: 0 0 10px; font-size: 13px;">
-          Shows suspicious characters (non-ASCII, invisible, or mapped). Use this to extend rules when you encounter new weirdness.
+          Shows suspicious characters (non-ASCII, invisible, or mapped). Use the small button on each row to disable/enable conversion for that specific character.
         </div>
         <div id="diagWrap"></div>
       </div>
@@ -543,11 +567,11 @@
     // Prime marks sometimes used as quotes
     ["′", "'"], ["″", '"'], ["‵", "'"], ["‶", '"'],
 
-    // Accents/backticks commonly pasted as apostrophes
-    ["´", "'"], ["`", "'"],
+    // Accents commonly pasted as apostrophes
+    ["´", "'"],
 
     // Dashes and minus variants
-    ["‐", "-"], ["-", "-"], ["‒", "-"], ["–", "-"], ["—", "-"], ["―", "-"],
+    ["‐", "-"], ["‒", "-"], ["–", "-"], ["—", "-"], ["―", "-"],
     ["−", "-"], // minus sign
 
     // Ellipsis
@@ -582,55 +606,137 @@
     ["ﬀ", "ff"], ["ﬁ", "fi"], ["ﬂ", "fl"], ["ﬃ", "ffi"], ["ﬄ", "ffl"], ["ﬅ", "ft"], ["ﬆ", "st"],
   ]);
 
+
+// ---------- Per-character rule toggles (Diagnostics) ----------
+// Stored in localStorage so you can tweak a session without editing the rules.
+const DISABLED_KEY = "asciiFixer.disabledChars.v1";
+const disabledChars = loadDisabledChars();
+
+function loadDisabledChars() {
+  try {
+    const raw = localStorage.getItem(DISABLED_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr.filter(v => typeof v === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveDisabledChars() {
+  try { localStorage.setItem(DISABLED_KEY, JSON.stringify([...disabledChars])); } catch {}
+}
+
+function isRuleDisabled(ch) {
+  return disabledChars.has(ch);
+}
+
+function toggleRule(ch) {
+  if (disabledChars.has(ch)) disabledChars.delete(ch);
+  else disabledChars.add(ch);
+  saveDisabledChars();
+}
+
+function isInvisibleChar(ch) {
+  const ok = INVISIBLES_REGEX.test(ch);
+  INVISIBLES_REGEX.lastIndex = 0;
+  return ok;
+}
+
+function isToggleEligible(ch) {
+  return REPLACEMENTS.has(ch) || LIGATURES.has(ch) || isInvisibleChar(ch);
+}
+
+function encCh(ch) { return encodeURIComponent(ch); }
+function decCh(v) { try { return decodeURIComponent(v); } catch { return v; } }
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => (
+    c === "&" ? "&amp;" :
+    c === "<" ? "&lt;" :
+    c === ">" ? "&gt;" :
+    c === '"' ? "&quot;" : "&#39;"
+  ));
+}
+
   function normalizeNFKC(s) {
     try { return s.normalize("NFKC"); } catch { return s; }
   }
 
   // Convert text + return metadata for stats
-  function convertText(input, opts) {
-    let s = input;
+  
+function convertText(input, opts) {
+  let s = input;
 
-    if (opts.nfkc) s = normalizeNFKC(s);
-    if (opts.removeInvisible) s = s.replace(INVISIBLES_REGEX, "");
+  if (opts.nfkc) s = normalizeNFKC(s);
 
-    let out = "";
-    let replacements = 0;
+  let out = "";
+  let replacements = 0;
 
-    for (const ch of s) {
-      if (opts.ligatures && LIGATURES.has(ch)) {
-        out += LIGATURES.get(ch);
-        replacements++;
-        continue;
-      }
-      if (REPLACEMENTS.has(ch)) {
-        out += REPLACEMENTS.get(ch);
-        replacements++;
-        continue;
-      }
-      out += ch;
+  for (const ch of s) {
+    // Invisibles: remove by default (if enabled), unless explicitly disabled.
+    if (opts.removeInvisible && isInvisibleChar(ch)) {
+      if (isRuleDisabled(ch)) out += ch;
+      else { replacements++; continue; }
+      continue;
     }
 
-    // Optional mild cleanup: collapse repeated spaces/tabs but keep newlines intact.
-    out = out.replace(/[ \t]{2,}/g, " ");
-
-    return { out, replacements };
-  }
-
-  function classifyChar(ch, opts) {
-    if (opts.removeInvisible && INVISIBLES_REGEX.test(ch)) {
-      INVISIBLES_REGEX.lastIndex = 0;
-      return { kind: "invisible", replacement: "(removed)" };
+    // Ligatures
+    if (opts.ligatures && LIGATURES.has(ch) && !isRuleDisabled(ch)) {
+      out += LIGATURES.get(ch);
+      replacements++;
+      continue;
     }
-    INVISIBLES_REGEX.lastIndex = 0;
 
-    if (opts.ligatures && LIGATURES.has(ch)) return { kind: "ligature", replacement: JSON.stringify(LIGATURES.get(ch)) };
-    if (REPLACEMENTS.has(ch)) return { kind: "mapped", replacement: JSON.stringify(REPLACEMENTS.get(ch)) };
+    // Mapped replacements
+    if (REPLACEMENTS.has(ch) && !isRuleDisabled(ch)) {
+      out += REPLACEMENTS.get(ch);
+      replacements++;
+      continue;
+    }
 
-    const cp = ch.codePointAt(0);
-    if (cp > 0x7F) return { kind: "non-ascii", replacement: "(no rule)" };
-
-    return null;
+    out += ch;
   }
+
+  // Optional mild cleanup: collapse repeated spaces/tabs but keep newlines intact.
+  out = out.replace(/[ \t]{2,}/g, " ");
+
+  return { out, replacements };
+}
+
+  
+function classifyChar(ch, opts) {
+  // Always flag invisibles (even if you don't remove them),
+  // so Diagnostics can show them and you can toggle per-char behavior.
+  if (isInvisibleChar(ch)) {
+    if (opts.removeInvisible) {
+      return isRuleDisabled(ch)
+        ? { kind: "invisible (kept)", replacement: "(kept)" }
+        : { kind: "invisible", replacement: "(removed)" };
+    }
+    return { kind: "invisible", replacement: "(present)" };
+  }
+
+  if (opts.ligatures && LIGATURES.has(ch)) {
+    const rep = JSON.stringify(LIGATURES.get(ch));
+    return isRuleDisabled(ch)
+      ? { kind: "ligature (disabled)", replacement: rep }
+      : { kind: "ligature", replacement: rep };
+  }
+
+  if (REPLACEMENTS.has(ch)) {
+    const rep = JSON.stringify(REPLACEMENTS.get(ch));
+    return isRuleDisabled(ch)
+      ? { kind: "mapped (disabled)", replacement: rep }
+      : { kind: "mapped", replacement: rep };
+  }
+
+  const cp = ch.codePointAt(0);
+  if (cp > 0x7F) return { kind: "non-ascii", replacement: "(no rule)" };
+
+  return null;
+}
 
   function escapeVisible(ch) {
     if (ch === "\n") return "\\n";
@@ -662,44 +768,55 @@
     return rows;
   }
 
-  function renderDiagnostics(rows) {
-    const wrap = $("diagWrap");
+  
+function renderDiagnostics(rows) {
+  const wrap = $("diagWrap");
 
-    if (!rows.length) {
-      wrap.innerHTML = `<div class="muted">No suspicious characters found.</div>`;
-      return;
-    }
-
-    const body = rows.map(r => {
-      const charShown = escapeVisible(r.ch);
-      const charCell = `<span class="charbox" title="${r.cp}">${charShown}</span>`;
-      const kind = `<span class="pill">${r.kind}</span>`;
-      return `
-        <tr>
-          <td>${charCell}</td>
-          <td class="mono">${r.cp}</td>
-          <td>${kind}</td>
-          <td class="mono">${r.count}</td>
-          <td class="mono">${r.replacement}</td>
-        </tr>
-      `.trim();
-    }).join("");
-
-    wrap.innerHTML = `
-      <table>
-        <thead>
-          <tr>
-            <th>Char</th>
-            <th>Codepoint</th>
-            <th>Type</th>
-            <th>Count</th>
-            <th>Replacement</th>
-          </tr>
-        </thead>
-        <tbody>${body}</tbody>
-      </table>
-    `;
+  if (!rows.length) {
+    wrap.innerHTML = `<div class="muted">No suspicious characters found.</div>`;
+    return;
   }
+
+  const body = rows.map(r => {
+    const charShown = escapeHtml(escapeVisible(r.ch));
+    const charCell = `<span class="charbox" title="${escapeHtml(r.cp)}">${charShown}</span>`;
+    const kind = `<span class="pill">${escapeHtml(r.kind)}</span>`;
+
+    const eligible = isToggleEligible(r.ch) && (r.kind.startsWith("mapped") || r.kind.startsWith("ligature") || r.kind.startsWith("invisible"));
+    const disabled = eligible ? isRuleDisabled(r.ch) : false;
+
+    const toggleCell = eligible
+      ? `<button class="diagToggle ${disabled ? "off" : "on"}" data-ch="${encCh(r.ch)}" aria-pressed="${disabled ? "true" : "false"}" title="${disabled ? "Conversion disabled for this character (click to enable)." : "Conversion enabled for this character (click to disable)."}">${disabled ? "×" : "✓"}</button>`
+      : `<span class="muted">—</span>`;
+
+    return `
+      <tr>
+        <td>${toggleCell}</td>
+        <td>${charCell}</td>
+        <td class="mono">${escapeHtml(r.cp)}</td>
+        <td>${kind}</td>
+        <td class="mono">${escapeHtml(r.count)}</td>
+        <td class="mono">${escapeHtml(r.replacement)}</td>
+      </tr>
+    `.trim();
+  }).join("");
+
+  wrap.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th title="Toggle conversion on/off">On</th>
+          <th>Char</th>
+          <th>Codepoint</th>
+          <th>Type</th>
+          <th>Count</th>
+          <th>Replacement</th>
+        </tr>
+      </thead>
+      <tbody>${body}</tbody>
+    </table>
+  `;
+}
 
   function toast(msg) {
     const el = $("toast");
@@ -734,6 +851,19 @@
 
   // ---------- UI events ----------
   $("btnConvert").addEventListener("click", runConversion);
+
+
+// Diagnostics toggle: enable/disable conversion for a specific character
+$("diagWrap").addEventListener("click", (e) => {
+  const btn = e.target.closest && e.target.closest("button.diagToggle");
+  if (!btn) return;
+  const ch = decCh(btn.dataset.ch || "");
+  if (!ch) return;
+
+  toggleRule(ch);
+  runConversion();
+  toast(isRuleDisabled(ch) ? `Disabled: ${hexCodepoint(ch)}` : `Enabled: ${hexCodepoint(ch)}`);
+});
 
   $("btnSwap").addEventListener("click", () => {
     const a = $("input").value;
